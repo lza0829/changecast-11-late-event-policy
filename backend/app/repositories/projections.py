@@ -6,31 +6,47 @@ from typing import Any
 import sqlite3
 
 
-def replace_stream_projection(
+def upsert_projection_row(
     conn: sqlite3.Connection,
     *,
     stream_id: int,
-    rows: list[dict[str, Any]],
+    row: dict[str, Any],
+    batch_id: int,
     updated_at: str,
 ) -> None:
+    """Write one entity row.  The caller has already adjudicated that this
+    write is allowed by the per-entity seq rule."""
+    conn.execute(
+        """
+        INSERT INTO projection_rows(
+            stream_id, entity_key, payload_json, applied_seq, applied_event_id,
+            applied_batch_id, deleted, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(stream_id, entity_key) DO UPDATE SET
+            payload_json=excluded.payload_json,
+            applied_seq=excluded.applied_seq,
+            applied_event_id=excluded.applied_event_id,
+            applied_batch_id=excluded.applied_batch_id,
+            deleted=excluded.deleted,
+            updated_at=excluded.updated_at
+        """,
+        (
+            stream_id,
+            row["entity_key"],
+            json.dumps(row.get("payload"), ensure_ascii=False)
+            if row.get("payload") is not None
+            else None,
+            row["applied_seq"],
+            row["applied_event_id"],
+            batch_id,
+            1 if row.get("deleted") else 0,
+            updated_at,
+        ),
+    )
+
+
+def delete_stream_projection(conn: sqlite3.Connection, stream_id: int) -> None:
     conn.execute("DELETE FROM projection_rows WHERE stream_id=?", (stream_id,))
-    for row in rows:
-        conn.execute(
-            """
-            INSERT INTO projection_rows(
-                stream_id, entity_key, payload_json, applied_seq, applied_event_id, deleted, updated_at
-            ) VALUES (?,?,?,?,?,?,?)
-            """,
-            (
-                stream_id,
-                row["entity_key"],
-                json.dumps(row.get("payload"), ensure_ascii=False) if row.get("payload") is not None else None,
-                row["applied_seq"],
-                row["applied_event_id"],
-                1 if row.get("deleted") else 0,
-                updated_at,
-            ),
-        )
 
 
 def list_projections(
@@ -55,6 +71,10 @@ def list_projections(
         d["deleted"] = bool(d["deleted"])
         out.append(d)
     return out
+
+
+def projection_map(conn: sqlite3.Connection, stream_id: int) -> dict[str, dict[str, Any]]:
+    return {r["entity_key"]: r for r in list_projections(conn, stream_id=stream_id)}
 
 
 def list_known_event_ids(conn: sqlite3.Connection, stream_id: int) -> set[str]:

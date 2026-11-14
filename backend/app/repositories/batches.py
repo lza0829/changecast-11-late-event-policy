@@ -12,6 +12,10 @@ def insert_batch(
     stream_id: int,
     status: str,
     counts: dict[str, int],
+    batch_kind: str,
+    late_policy: str,
+    watermark_before: int,
+    watermark_after: int,
     note: str | None,
     created_at: str,
 ) -> int:
@@ -19,20 +23,32 @@ def insert_batch(
         """
         INSERT INTO project_batches(
             batch_no, stream_id, status, source_events, applied_upsert, applied_delete,
-            skipped_duplicate, projected_alive, projected_deleted, max_seq, note, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            skipped_duplicate, projected_alive, projected_deleted, max_seq,
+            batch_kind, late_policy, watermark_before, watermark_after,
+            late_seen, late_rejected, late_routed, late_applied, late_ineffective,
+            note, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             batch_no,
             stream_id,
             status,
-            counts["source_events"],
-            counts["applied_upsert"],
-            counts["applied_delete"],
-            counts["skipped_duplicate"],
-            counts["projected_alive"],
-            counts["projected_deleted"],
-            counts["max_seq"],
+            counts.get("source_events", 0),
+            counts.get("applied_upsert", 0),
+            counts.get("applied_delete", 0),
+            counts.get("skipped_duplicate", 0),
+            counts.get("projected_alive", 0),
+            counts.get("projected_deleted", 0),
+            counts.get("max_seq", 0),
+            batch_kind,
+            late_policy,
+            watermark_before,
+            watermark_after,
+            counts.get("late_seen", 0),
+            counts.get("late_rejected", 0),
+            counts.get("late_routed", 0),
+            counts.get("late_applied", 0),
+            counts.get("late_ineffective", 0),
             note,
             created_at,
         ),
@@ -40,11 +56,17 @@ def insert_batch(
     return int(cur.lastrowid)
 
 
-def list_batches(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        "SELECT * FROM project_batches ORDER BY id DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
+def list_batches(
+    conn: sqlite3.Connection, limit: int = 50, kind: str | None = None
+) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM project_batches WHERE 1=1"
+    params: list[Any] = []
+    if kind is not None:
+        sql += " AND batch_kind=?"
+        params.append(kind)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -64,8 +86,9 @@ def insert_applied_event(
     conn.execute(
         """
         INSERT INTO applied_events(
-            batch_id, stream_id, event_id, entity_key, op, seq, event_time, result, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
+            batch_id, stream_id, event_id, entity_key, op, seq, event_time,
+            result, is_late, entity_seq_before, detail, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             batch_id,
@@ -76,6 +99,9 @@ def insert_applied_event(
             event["seq"],
             event["event_time"],
             event["result"],
+            1 if event.get("is_late") else 0,
+            event.get("entity_seq_before"),
+            event.get("detail"),
             created_at,
         ),
     )

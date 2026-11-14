@@ -29,3 +29,17 @@ def set_watermark(conn: sqlite3.Connection, stream_id: int, watermark_seq: int) 
         "UPDATE project_streams SET watermark_seq=? WHERE id=?",
         (watermark_seq, stream_id),
     )
+
+
+def set_arrival_wave(conn: sqlite3.Connection, stream_id: int, arrival_wave: int) -> None:
+    conn.execute(
+        "UPDATE project_streams SET arrival_wave=? WHERE id=?",
+        (arrival_wave, stream_id),
+    )
+
+
+def set_late_policy(conn: sqlite3.Connection, stream_id: int, late_policy: str) -> None:
+    conn.execute(
+        "UPDATE project_streams SET late_policy=? WHERE id=?",
+        (late_policy, stream_id),
+    )
